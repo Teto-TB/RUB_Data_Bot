@@ -1,6 +1,6 @@
-# RUB Exam Bot
+# RUB Data Bot
 
-**RUB Exam Bot** is a Telegram bot that helps students at Ruhr University Bochum (RUB) find and access old exam papers for specific modules. By leveraging a dedicated Telegram channel to store documents, the bot delivers requested exams directly to the user in a simple and efficient way.
+**RUB Data Bot** is a Telegram bot that helps students at Ruhr University Bochum (RUB) find and access old exam papers for specific modules. By leveraging a dedicated Telegram channel to store documents, the bot delivers requested exams directly to the user in a simple and efficient way.
 
 ## 📌 Features
 
