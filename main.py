@@ -1,7 +1,7 @@
 import telebot
 from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 import sqlite3
-from config import BOT_TOKEN, PRIVATE_CHANNEL_ID 
+from config import BOT_TOKEN, PRIVATE_CHANNEL_ID, ADMIN_TELEGRAM_ID  # Add your Telegram ID to the config
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -155,6 +155,13 @@ def handle_choice(call):
             except Exception as e:
                 print(f"Error forwarding message ID {message_id[0]}: {e}")
 
-# Start the bot
+
+# Start the bot with error handling
 print("Bot is running...")
-bot.polling()
+while True:
+    try:
+        bot.polling()
+    except Exception as e:
+        error_message = f"An error occurred: {e}"
+        print(error_message)
+        bot.send_message(ADMIN_TELEGRAM_ID, error_message)
