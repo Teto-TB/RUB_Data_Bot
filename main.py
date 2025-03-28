@@ -47,6 +47,31 @@ def forward_channel_messages(message):
     # Extract tags from the message text or caption (words start with #)
     tags = []
     if message.content_type == 'text':
+        if message.text == "/delete":
+            if message.reply_to_message:
+                try:    
+                    # Delete the message from the database
+                    cursor.execute(f"DELETE FROM messages WHERE message_id = {int(message.reply_to_message.message_id)}")
+                except Exception as e:
+                    print(f"❌ Failed to delete from DB: {e}")
+
+                try:
+                    # Delete the message you replied to
+                    bot.delete_message(PRIVATE_CHANNEL_ID, message.reply_to_message.message_id)
+                    print(f"Deleted message: {message.reply_to_message.message_id}")
+                except Exception as e:
+                    print(f"❌ Failed to delete replied message: {e}")
+
+                try:
+                    # Delete the /delete command message itself
+                    bot.delete_message(PRIVATE_CHANNEL_ID, message.message_id)
+                except Exception as e:
+                    print(f"❌ Failed to delete command message: {e}")
+                
+            else:
+                bot.reply_to(message, "❗ Reply to a message with /delete to delete it.")
+                return
+            
         tags = [word for word in message.text.split() if word.startswith('#')]
     elif message.content_type in ['photo', 'document']:
         if message.caption:
