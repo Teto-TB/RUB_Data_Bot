@@ -34,8 +34,9 @@ conn.commit()
 def set_bot_commands():
     commands = [
         BotCommand("start", "Start the bot"),
-        # BotCommand("help", "Show available commands"),
         BotCommand("find", "Finde a module"),
+        BotCommand("send", "Share your PDF-Exames with others"),
+        BotCommand("help", "See the available commands"),
     ]
     bot.set_my_commands(commands)
 # Call this function when the bot starts
@@ -96,16 +97,29 @@ def start_command(message):
     conn.commit()
 
     start_message = (
-        "👋 Welcome to the RUB Exames Bot!\n\n"
-        "Here are some commands to get you started:\n"
-        "/find - Choose an option to find a module\n\n"
-        "You can use the /find command to search for modules by numbers or names."
+        f"👋 *Welcome {user.first_name or 'there'} to the RUB Exams Bot!*\n\n"
+        "📚 This bot helps you find and share past exams easily.\n\n"
+        "Here’s what you can do:\n"
+        "🔍 /find — Search for a module\n"
+        "📤 /send — Share your PDF exams with others\n"
+        "Let's make learning easier together! 🚀"
     )
-
     bot.send_message(
         message.chat.id,
         start_message,
     )
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    help_text = (
+        "📌 *Available Commands:*\n\n"
+        "/start - Start the bot and get a welcome message\n"
+        "/find - Search for a module\n"
+        "/send - Share your PDF exams with the community\n"
+        "/help - Show this help message\n"
+    )
+    bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
+
 
 # /find command - Choose an option to find a module
 @bot.message_handler(commands=["find"])
@@ -179,6 +193,29 @@ def handle_choice(call):
                 print(f"Error forwarding message ID {message_id[0]}: {e}")
                 bot.send_message(ADMIN_TELEGRAM_ID, f"Error forwarding message ID {message_id[0]}: {e}")
 
+# Dictionary to track users waiting to send a PDF
+waiting_for_pdf = {}
+@bot.message_handler(commands=['send'])
+def ask_for_pdf(message):
+    bot.reply_to(message, "Please send the PDF file and write the name and the number of the module in the caption like this:\n\n #Mathe #202212")
+    waiting_for_pdf[message.from_user.id] = True
+
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    user_id = message.from_user.id
+
+    # Check if the user was asked to send a PDF
+    if waiting_for_pdf.get(user_id):
+        if message.document.mime_type == 'application/pdf':
+            # Forward to admin
+            bot.forward_message(ADMIN_TELEGRAM_ID, message.chat.id, message.message_id)
+            bot.reply_to(message, "PDF has been forwarded to the admin.✅ \n\n Your file will be validated and published soon.")
+        else:
+            bot.reply_to(message, "❌ Please send a valid PDF file.")
+
+        waiting_for_pdf[user_id] = False
+    else:
+        bot.reply_to(message, "Type /send to start the sending process.")
 
 # Start the bot with error handling
 print("Bot is running...")
