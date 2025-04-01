@@ -53,6 +53,7 @@ def forward_channel_messages(message):
                 try:    
                     # Delete the message from the database
                     cursor.execute(f"DELETE FROM messages WHERE message_id = {int(message.reply_to_message.message_id)}")
+                    conn.commit()
                 except Exception as e:
                     print(f"❌ Failed to delete from DB: {e}")
 
