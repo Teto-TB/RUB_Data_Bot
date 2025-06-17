@@ -1,0 +1,25 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venvname/
+env/
+.venv/
+
+# SQLite database
+*.db
+*.sqlite3
+
+# Logs
+*.log
+
+
+# Environment variables / secrets
+*.env
+config.py
+
+test.py
+
+
