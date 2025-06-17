@@ -1,232 +1,363 @@
-import telebot, time
-from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+import logging
+import time
 import sqlite3
-from config import BOT_TOKEN, PRIVATE_CHANNEL_ID, ADMIN_TELEGRAM_ID  
+from logging.handlers import RotatingFileHandler
+from telebot import TeleBot
+from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
+from config import BOT_TOKEN, PRIVATE_CHANNEL_ID, ADMIN_TELEGRAM_ID
 
-bot = telebot.TeleBot(BOT_TOKEN)
-
-
-# Initialize SQLite database
-conn = sqlite3.connect('messages.db', check_same_thread=False)
-cursor = conn.cursor()
-
-# Create table to store messages and users
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    message_id INTEGER,
-    tags TEXT
+# ─── 1. CONFIGURE LOGGING 
+file_handler = RotatingFileHandler(
+    'bot.log',
+    maxBytes=5 * 1024 * 1024,  # 5 MB
 )
-''')
-cursor.execute('''
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,
-    last_name TEXT,
-    language_code TEXT,
-    is_premium BOOLEAN
+file_handler.setLevel(logging.DEBUG)
+file_formatter = logging.Formatter(
+    '%(asctime)s %(levelname)-8s %(name)s %(message)s'
 )
-''')
-conn.commit()
+file_handler.setFormatter(file_formatter)
 
-# Function to set available commands
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter(
+    '%(asctime)s %(levelname)-8s %(message)s'
+)
+console_handler.setFormatter(console_formatter)
+
+logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler])
+logger = logging.getLogger(__name__)
+logger.debug("Logger configured, starting up")
+
+# ─── 2. INITIALIZE BOT 
+bot = TeleBot(BOT_TOKEN)
+logger.debug("TeleBot initialized")
+
+# ─── 3. SQLite DATABASE SETUP 
+def init_db():
+    logger.debug("Initializing database (WAL mode + tables)")
+
+    # Create tables to store messages and users
+    with sqlite3.connect('messages.db', check_same_thread=False) as conn:
+        # Enable WAL mode for better concurrency
+        conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER UNIQUE,
+                tags TEXT
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                language_code TEXT,
+                is_premium BOOLEAN
+            )
+        ''')
+    logger.debug("Database initialized")
+
+def get_db_connection():
+    logger.debug("Opening new DB connection")
+    conn = sqlite3.connect('messages.db', check_same_thread=False)
+    conn.execute('PRAGMA journal_mode=WAL;')
+    cursor = conn.cursor()
+    logger.debug("DB connection opened: %s", conn)
+    return conn, cursor
+
+# ─── 4. SET BOT COMMANDS 
 def set_bot_commands():
     commands = [
         BotCommand("start", "Start the bot"),
-        BotCommand("find", "Finde a module"),
-        BotCommand("send", "Share your PDF-Exames with others"),
-        BotCommand("help", "See the available commands"),
+        BotCommand("find", "Find a module"),
+        BotCommand("send", "Share your PDF exams"),
+        BotCommand("help", "See available commands"),
     ]
+    logger.debug("Setting bot commands: %s", commands)
     bot.set_my_commands(commands)
-# Call this function when the bot starts
-# set_bot_commands()
+    logger.info("Bot commands set")
+
+# ─── 5. HANDLERS 
 
 # Handle new messages in the channel
 @bot.channel_post_handler(content_types=['text', 'photo', 'document'])
 def forward_channel_messages(message):
-    # Extract tags from the message text or caption (words start with #)
-    tags = []
-    if message.content_type == 'text':
-        if message.text == "/delete":
-            if message.reply_to_message:
-                try:    
-                    # Delete the message from the database
-                    cursor.execute(f"DELETE FROM messages WHERE message_id = {int(message.reply_to_message.message_id)}")
-                    conn.commit()
-                except Exception as e:
-                    print(f"❌ Failed to delete from DB: {e}")
-
-                try:
-                    # Delete the message you replied to
-                    bot.delete_message(PRIVATE_CHANNEL_ID, message.reply_to_message.message_id)
-                    print(f"Deleted message: {message.reply_to_message.message_id}")
-                except Exception as e:
-                    print(f"❌ Failed to delete replied message: {e}")
-
-                try:
-                    # Delete the /delete command message itself
-                    bot.delete_message(PRIVATE_CHANNEL_ID, message.message_id)
-                except Exception as e:
-                    print(f"❌ Failed to delete command message: {e}")
+    logger.debug(
+        "Entered forward_channel_messages: id=%s, type=%s",
+        message.message_id, message.content_type
+    )
+    conn, cursor = get_db_connection()
+    try:
+        # Handle /delete
+        if message.content_type == 'text' and message.text == '/delete' and message.reply_to_message:
+            logger.info("Processing /delete for message %s", message.reply_to_message.message_id)
+            try:
+                # Delete the message from the database
+                with sqlite3.connect('messages.db', check_same_thread=False) as del_conn:
+                    del_conn.execute('PRAGMA journal_mode=WAL;')
+                    del_conn.execute(
+                        'DELETE FROM messages WHERE message_id = ?',
+                        (message.reply_to_message.message_id,)
+                    )
                 
-            else:
-                bot.reply_to(message, "❗ Reply to a message with /delete to delete it.")
-                return
-            
-        tags = [word for word in message.text.split() if word.startswith('#')]
-    elif message.content_type in ['photo', 'document']:
-        if message.caption:
-            tags = [word for word in message.caption.split() if word.startswith('#')]
+                # Delete the message you replied to
+                bot.delete_message(PRIVATE_CHANNEL_ID, message.reply_to_message.message_id)
+                # Delete the /delete command message itself
+                bot.delete_message(PRIVATE_CHANNEL_ID, message.message_id)
+                logger.info("Deleted message %s and command %s",
+                            message.reply_to_message.message_id, message.message_id)
+            except Exception as e:
+                logger.exception("Failed to delete messages from DB or channel")
+            return
 
-    # Save message ID and tags to the database
-    for tag in tags:
-        cursor.execute('INSERT INTO messages (message_id, tags) VALUES (?, ?)', (message.message_id, tag))
-    conn.commit()
+        # Extract tags from the message text or caption (words start with # )
+        if message.content_type == 'text':
+            tags = [w for w in message.text.split() if w.startswith('#')]
+        elif message.content_type in ('photo', 'document') and message.caption:
+            tags = [w for w in message.caption.split() if w.startswith('#')]
+        else:
+            tags = []
+        logger.debug("Extracted tags: %r", tags)
+
+        # Store tags and message IDs in the database
+        for tag in tags:
+            try:
+                cursor.execute(
+                    'INSERT OR IGNORE INTO messages (message_id, tags) VALUES (?, ?)',
+                    (message.message_id, tag)
+                )
+                logger.info("Inserted tag '%s' for message_id %s", tag, message.message_id)
+            except Exception:
+                logger.exception("Failed to insert tag '%s' for message_id %s", tag, message.message_id)
+        conn.commit()
+        logger.debug("Committed DB transaction in forward_channel_messages")
+    except Exception:
+        logger.exception("Unhandled exception in forward_channel_messages")
+    finally:
+        conn.close()
+        logger.debug("Closed DB connection in forward_channel_messages")
 
 # /start command - Send welcome message with buttons
-@bot.message_handler(commands=["start"])
+@bot.message_handler(commands=['start'])
 def start_command(message):
+    logger.info("Received /start from user %s (%s)", message.from_user.id, message.from_user.username)
     user = message.from_user
-    user_data = (user.id, user.username, user.first_name, user.last_name, user.language_code, user.is_premium)
+    with sqlite3.connect('messages.db', check_same_thread=False) as conn:
+        conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('''
+            INSERT OR REPLACE INTO users
+            (id, username, first_name, last_name, language_code, is_premium)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            user.id,
+            user.username,
+            user.first_name,
+            user.last_name,
+            user.language_code,
+            user.is_premium
+        ))
+        logger.debug("Upserted user into DB: %s", user.id)
 
-    # log user information
-    cursor.execute('''
-    INSERT OR REPLACE INTO users (id, username, first_name, last_name, language_code, is_premium)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ''', user_data)
-    conn.commit()
-
-    start_message = (
+    welcome = (
         f"👋 *Welcome {user.first_name or 'there'} to the RUB Exams Bot!*\n\n"
         "📚 This bot helps you find and share past exams easily.\n\n"
-        "Here’s what you can do:\n"
-        "🔍 /find — Search for a module\n"
-        "📤 /send — Share your PDF exams with others\n"
-        "Let's make learning easier together! 🚀"
+        "/find — Search for a module\n"
+        "/send — Share your PDF exams\n"
+        "/help — See available commands"
     )
-    bot.send_message(
-        message.chat.id,
-        start_message,
-    )
+    bot.send_message(message.chat.id, welcome, parse_mode='Markdown')
+    logger.info("Sent welcome message to %s", message.from_user.id)
+
 
 @bot.message_handler(commands=['help'])
 def help_command(message):
+    logger.info("Received /help from user %s", message.from_user.id)
     help_text = (
         "📌 *Available Commands:*\n\n"
-        "/start - Start the bot and get a welcome message\n"
-        "/find - Search for a module\n"
-        "/send - Share your PDF exams with the community\n"
-        "/help - Show this help message\n"
+        "/start — Start the bot and get a welcome message\n"
+        "/find — Search for a module\n"
+        "/send — Share your PDF exams with the community\n"
+        "/help — Show this help message"
     )
     bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
-
+    logger.debug("Sent help message to %s", message.from_user.id)
 
 # /find command - Choose an option to find a module
-@bot.message_handler(commands=["find"])
+@bot.message_handler(commands=['find'])
 def choose_option(message):
+    logger.info("Received /find from user %s", message.from_user.id)
     keyboard = InlineKeyboardMarkup(row_width=2)
     buttons = [
         InlineKeyboardButton("Number", callback_data="choose_numbers"),
         InlineKeyboardButton("Name", callback_data="choose_names")
     ]
     keyboard.add(*buttons)
-    bot.send_message(message.chat.id, "Find a module using:", reply_markup=keyboard)
+    bot.send_message(message.chat.id, "Find a module by:", reply_markup=keyboard)
+    logger.debug("Sent find-options keyboard to %s", message.from_user.id)
+
 
 # Handle user's initial selection
 @bot.callback_query_handler(func=lambda call: call.data in ["choose_numbers", "choose_names"])
 def handle_initial_choice(call):
-    chosen_option = call.data
+    logger.info("User %s chose initial option %s", call.from_user.id, call.data)
+    option = call.data
 
     # Fetch tags from the database
-    cursor.execute('SELECT DISTINCT tags FROM messages')
-    rows = cursor.fetchall()
-    all_tags = [row[0] for row in rows if row[0]]
+    with sqlite3.connect('messages.db', check_same_thread=False) as conn:
+        conn.execute('PRAGMA journal_mode=WAL;')
+        rows = conn.execute('SELECT DISTINCT tags FROM messages').fetchall()
+    all_tags = [r[0] for r in rows if r[0]]
+    logger.debug("Fetched %s distinct tags", len(all_tags))
 
-    if chosen_option == "choose_numbers":
-        OPTIONS = sorted([tag for tag in all_tags if tag[1:].isdigit()])
+    if option == "choose_numbers":
+        choices = sorted([t for t in all_tags if t[1:].isdigit()])
         keyboard = InlineKeyboardMarkup(row_width=3)
-
     else:
-        OPTIONS = sorted([tag for tag in all_tags if not tag[1:].isdigit()])
+        choices = sorted([t for t in all_tags if not t[1:].isdigit()])
         keyboard = InlineKeyboardMarkup(row_width=2)
+    logger.debug("Filtered choices (%s): %r", option, choices)
 
-    if not OPTIONS:
+    if not choices:
         bot.send_message(call.message.chat.id, "No tags available.")
-        keyboard = InlineKeyboardMarkup(row_width=2)
+        logger.warning("No tags available for option %s", option)
         return
 
-    buttons = [InlineKeyboardButton(option, callback_data=option) for option in OPTIONS]
+    buttons = [InlineKeyboardButton(c, callback_data=c) for c in choices]
     buttons.append(InlineKeyboardButton("Go Back", callback_data="go_back"))
     keyboard.add(*buttons)
+    bot.edit_message_text(
+        "Choose a module:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=keyboard
+    )
+    logger.debug("Edited message with module choices for %s", call.from_user.id)
 
-    bot.edit_message_text("Choose a Module:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
 # Handle user's tag selection or go back action
-@bot.callback_query_handler(func=lambda call: call.data in [row[0] for row in cursor.execute('SELECT DISTINCT tags FROM messages').fetchall()] + ["go_back"])
+@bot.callback_query_handler(func=lambda call: call.data not in ["choose_numbers", "choose_names"])
 def handle_choice(call):
-    if call.data == "go_back":
+    logger.info("Handling choice '%s' for user %s", call.data, call.from_user.id)
+    data = call.data
+
+    if data == "go_back":
         keyboard = InlineKeyboardMarkup(row_width=2)
         buttons = [
             InlineKeyboardButton("Number", callback_data="choose_numbers"),
             InlineKeyboardButton("Name", callback_data="choose_names")
         ]
         keyboard.add(*buttons)
+        bot.edit_message_text(
+            "Find a module by:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=keyboard
+        )
+        logger.debug("User %s went back to initial menu", call.from_user.id)
+        return
 
-        bot.edit_message_text("Find a module using:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-
-    else:
-        chosen_option = call.data  # Get the selected option
-
+    conn, cursor = get_db_connection()
+    try:
         # Fetch message IDs associated with the chosen tag
-        cursor.execute('SELECT message_id FROM messages WHERE tags = ?', (chosen_option,))
-        message_ids = cursor.fetchall()
+        cursor.execute('SELECT message_id FROM messages WHERE tags = ?', (data,))
+        rows = cursor.fetchall()
+        logger.debug("Found %s messages for tag '%s'", len(rows), data)
 
-        if not message_ids:
+        if not rows:
             bot.send_message(call.message.chat.id, "No messages found for the selected tag.")
+            logger.warning("No messages for tag '%s'", data)
             return
 
         # Forward each message to the user
-        for message_id in message_ids:
+        for (mid,) in rows:
             try:
-                bot.forward_message(call.message.chat.id, PRIVATE_CHANNEL_ID, message_id[0])
+                bot.forward_message(call.message.chat.id, PRIVATE_CHANNEL_ID, mid)
+                logger.info("Forwarded message %s to user %s", mid, call.from_user.id)
             except Exception as e:
-                print(f"Error forwarding message ID {message_id[0]}: {e}")
-                bot.send_message(ADMIN_TELEGRAM_ID, f"Error forwarding message ID {message_id[0]}: {e}")
+                logger.exception("Error forwarding message ID %s", mid)
+                bot.send_message(ADMIN_TELEGRAM_ID, f"Error forwarding message ID {mid}: {e}")
+    except Exception:
+        logger.exception("Unhandled exception in handle_choice")
+    finally:
+        conn.close()
+        logger.debug("Closed DB connection in handle_choice")
 
+
+# ─── 6. SEND COMMAND HANDLERS 
 # Dictionary to track users waiting to send a PDF
 waiting_for_pdf = {}
+
 @bot.message_handler(commands=['send'])
 def ask_for_pdf(message):
-    bot.reply_to(message, "Please send the PDF file and write the name and the number of the module in the caption like this:\n\n #Mathe #202212")
+    logger.info("Received /send from user %s", message.from_user.id)
+    bot.reply_to(
+        message,
+        "Please send the PDF file and include tags in the caption like:\n\n#Mathe #202212"
+    )
     waiting_for_pdf[message.from_user.id] = True
+    logger.debug("Set waiting_for_pdf[%s] = True", message.from_user.id)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
+    logger.info("Received document from user %s", message.from_user.id)
     user_id = message.from_user.id
 
-    # Check if the user was asked to send a PDF
-    if waiting_for_pdf.get(user_id):
-        if message.document.mime_type == 'application/pdf':
-            # Forward to admin
-            bot.forward_message(ADMIN_TELEGRAM_ID, message.chat.id, message.message_id)
-            bot.reply_to(message, "PDF has been forwarded to the admin.✅ \n\n Your file will be validated and published soon.")
-        else:
-            bot.reply_to(message, "❌ Please send a valid PDF file.")
+     # Check if the user was asked to send a PDF
+    if not waiting_for_pdf.get(user_id):
+        logger.debug("Unexpected document (no /send), replying guidance")
+        return bot.reply_to(message, "Type /send to start the upload process.")
 
-        waiting_for_pdf[user_id] = False
-    else:
-        bot.reply_to(message, "Type /send to start the sending process.")
+    waiting_for_pdf[user_id] = False
+    logger.debug("Reset waiting_for_pdf[%s] to False", user_id)
 
-# Start the bot with error handling
-print("Bot is running...")
-if __name__=='__main__':
-    while True:
-        try:
-            bot.polling(non_stop=True, interval=0)
-        except Exception as e:
-            error_message = f"An error occurred: {e}"
-            print(error_message)
-            bot.send_message(ADMIN_TELEGRAM_ID, error_message)
-            time.sleep(5)
-            continue        
+    if message.document.mime_type != 'application/pdf':
+        logger.warning("User %s sent invalid mime_type %s", user_id, message.document.mime_type)
+        return bot.reply_to(message, "❌ Please send a valid PDF file.")
+
+    # Forward to admin
+    bot.forward_message(ADMIN_TELEGRAM_ID, message.chat.id, message.message_id)
+    bot.reply_to(message, "✅ PDF forwarded to admin. It will be published soon.")
+    logger.info("Forwarded PDF message %s from user %s to admin", message.message_id, user_id)
+
+
+# ─── 7. RUN BOT 
+if __name__ == '__main__':
+    logger.info("Starting bot setup")
+    init_db()
+    set_bot_commands()
+    logger.info("Bot setup complete, entering polling loop")
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=5)
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user (KeyboardInterrupt)")
+    except Exception:
+        logger.exception("Unexpected error, restarting in 5 seconds")
+        bot.send_message(ADMIN_TELEGRAM_ID, f"Unexpected error: {Exception}")
+
+        time.sleep(5)
+        bot.infinity_polling(timeout=60, long_polling_timeout=5)
+
+# ─── 8. OPTIONAL: RUNNING IN WHILE 
+# if __name__ == '__main__':
+#     logger.info("Starting bot setup")
+#     init_db()
+#     set_bot_commands()
+#     logger.info("Bot setup complete, entering polling loop")
+
+#     while True:
+#         try:
+#             bot.infinity_polling(timeout=60, long_polling_timeout=5)
+#         except KeyboardInterrupt:
+#             logger.info("Bot stopped by user (KeyboardInterrupt)")
+#             break   # exit the loop & script cleanly
+#         except Exception as e:
+#             # Catch *any* other error, notify and restart
+#             logger.exception("Unexpected error, restarting in 5 seconds")
+#             try:
+#                 bot.send_message(ADMIN_TELEGRAM_ID, f"Unexpected error: {e}")
+#             except Exception:
+#                 logger.warning("Failed to send error alert to admin")
+#             time.sleep(5)
+#             # loop will repeat, calling polling again
