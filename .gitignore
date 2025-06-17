@@ -4,8 +4,10 @@ __pycache__/
 *$py.class
 
 # Virtual environments
+venvName/
 venvname/
 env/
+venv/
 .venv/
 
 # SQLite database
@@ -21,5 +23,3 @@ env/
 config.py
 
 test.py
-
-
