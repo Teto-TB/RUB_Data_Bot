@@ -1,30 +1,37 @@
 import logging
 import time
 import sqlite3
-from logging.handlers import RotatingFileHandler
 from telebot import TeleBot
 from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 from config import BOT_TOKEN, PRIVATE_CHANNEL_ID, ADMIN_TELEGRAM_ID
 
 # ─── 1. CONFIGURE LOGGING 
-file_handler = RotatingFileHandler(
-    'bot.log',
-    maxBytes=5 * 1024 * 1024,  # 5 MB
-)
-file_handler.setLevel(logging.DEBUG)
-file_formatter = logging.Formatter(
-    '%(asctime)s %(levelname)-8s %(name)s %(message)s'
-)
-file_handler.setFormatter(file_formatter)
 
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_formatter = logging.Formatter(
-    '%(asctime)s %(levelname)-8s %(message)s'
-)
-console_handler.setFormatter(console_formatter)
+# Configure logging to file and console
+# file_handler = RotatingFileHandler(
+#     'bot.log',
+#     maxBytes=5 * 1024 * 1024,  # 5 MB
+# )
+# file_handler.setLevel(logging.DEBUG)
+# file_formatter = logging.Formatter(
+#     '%(asctime)s %(levelname)-8s %(name)s %(message)s'
+# )
+# file_handler.setFormatter(file_formatter)
 
-logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler])
+# console_handler = logging.StreamHandler()
+# console_handler.setLevel(logging.INFO)
+# console_formatter = logging.Formatter(
+#     '%(asctime)s %(levelname)-8s %(message)s'
+# )
+# console_handler.setFormatter(console_formatter)
+
+# logging.basicConfig(level=logging.DEBUG, handlers=[file_handler, console_handler])
+
+# Configure logging only to console
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)-8s %(name)s %(message)s'
+)
 logger = logging.getLogger(__name__)
 logger.debug("Logger configured, starting up")
 
