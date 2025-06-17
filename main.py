@@ -35,6 +35,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.debug("Logger configured, starting up")
 
+# to stop excessive logging from external libraries
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+
 # ─── 2. INITIALIZE BOT 
 bot = TeleBot(BOT_TOKEN)
 logger.debug("TeleBot initialized")
